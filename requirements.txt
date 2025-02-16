@@ -1,4 +1,7 @@
 pyautogen
-python-dotenv
-pytest
-autogen
+python-dotenv~=1.0.1
+pytest~=8.3.4
+autogen~=0.7.4
+pandas~=2.2.2
+RapidFuzz~=3.12.1
+nltk~=3.9.1
