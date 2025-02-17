@@ -1,13 +1,27 @@
+import re
 import pandas as pd
 import nltk
+import spacy
 from nltk.tokenize import word_tokenize
 from nltk.corpus import wordnet, stopwords
 from rapidfuzz import fuzz
+from nltk.stem import PorterStemmer
+ps = PorterStemmer()
+
+def normalize_phrase(phrase):
+    tokens = phrase.split()
+    # Stem each token and then rejoin
+    normalized = " ".join(ps.stem(token) for token in tokens)
+    return normalized
+
 
 # Download required NLTK resources
-nltk.download("punkt")
-nltk.download("wordnet")
-nltk.download("stopwords")  # Download stop words list
+#nltk.download("punkt")
+#nltk.download("wordnet")
+#nltk.download("stopwords")  # Download stop words list
+
+nlp = spacy.load("en_core_web_sm")
+stop_words = set(stopwords.words("english"))
 
 # Load CSV and extract symptom names
 csv_path = "src/sar_project/knowledge/Final_Augmented_dataset_Diseases_and_Symptoms.csv"
@@ -15,7 +29,6 @@ df = pd.read_csv(csv_path)
 
 # Symptoms are all columns except the first (assumed to be the disease column)
 symptoms = list(df.columns[1:])
-
 
 # Create a symptom-to-synonyms dictionary
 def expand_symptoms(symptom_list):
@@ -33,38 +46,84 @@ def expand_symptoms(symptom_list):
 symptom_synonyms = expand_symptoms(symptoms)
 
 
+# Remove stop words from the text
 def preprocess_text(text):
     """Preprocess text by tokenizing and removing stop words."""
-    stop_words = set(stopwords.words("english"))
+
     tokens = word_tokenize(text.lower())  # Tokenize input text
     filtered_tokens = [word for word in tokens if word not in stop_words]  # Remove stopwords
     return filtered_tokens
 
 
+class SymptomMatch:
+    """Custom class to represent a symptom match."""
+
+    def __init__(self, phrase, phrase_stem=None, matched_symptom=None, synonym=None, match_type=""):
+        self.phrase = phrase
+        self.phrase_stem = phrase_stem
+        self.matched_symptom = matched_symptom
+        self.synonym = synonym
+        self.match_type = match_type  # "phrase" or "synonym"
+
+    def __repr__(self):
+        if self.match_type == "phrase":
+            return f"'{self.phrase}' matched with symptom: {self.matched_symptom} (whole phrase match)"
+        elif self.match_type == "dependency":
+            return f"'{self.phrase}' matched with symptom: {self.matched_symptom} (via dependency parsing) (Stemmed: {self.phrase_stem})"
+        elif self.synonym:
+            return f"'{self.phrase}' matched with symptom: {self.matched_symptom} (via synonym: {self.synonym})"
+        else:
+            return f"'{self.phrase}' matched with symptom: {self.matched_symptom}"
+
+
 # Symptom matching function
-def extract_symptoms(text, symptom_dict, threshold=100):
-    """Matches input text to symptoms using fuzzy matching."""
-    tokens = preprocess_text(text)
+def extract_symptoms(text, symptom_dict, threshold=80):
+    """Matches input text to symptoms using fuzzy matching and dependency parsing."""
+
     detected_symptoms = []
-    matched_words = set()  # To keep track of matched words to avoid redundancy
+    matched_words = set()  # Tracks words already matched to avoid redundancy
+    doc = nlp(text.lower())
+
+    # Dependency parsing to detect adjective-noun symptom phrases
+    for token in doc:
+        if token.text in stop_words:
+            continue
+        if token.dep_ == "acomp":  # Check if the token is an adjective complement
+            subject = None
+            for child in token.head.children:  # Look at the verb's children
+                if child.dep_ == "nsubj":  # Find the subject noun
+                    print("\nNoun:", child.text)
+                    subject = child.text
+                    break
+            if subject:
+                phrase = f"{token.text} {subject}"  # Example: "swollen leg"
+                print("phrase found:", phrase)
+                normalized_phrase = normalize_phrase(phrase)
+                print("normalized phrase:", normalized_phrase)
+
+                for symptom, synonyms in symptom_dict.items():
+                    for synonym in synonyms:
+                        normalized_synonym = normalize_phrase(synonym)
+                        score = fuzz.token_set_ratio(normalized_phrase, normalized_synonym)
+                        if score >= threshold:
+                            detected_symptoms.append(
+                                SymptomMatch(phrase=phrase, phrase_stem=normalized_phrase, matched_symptom=symptom, synonym=synonym, match_type="dependency"))
+                matched_words.update([token.text, subject])
+
+    for token in doc:
+        if token.text not in matched_words:
+            for symptom, synonyms in symptom_dict.items():
+                for synonym in synonyms:
+                    score = fuzz.token_set_ratio(token.text, synonym)
+                    if score >= threshold:
+                        detected_symptoms.append(SymptomMatch(phrase=token.text, matched_symptom=symptom, synonym=synonym))
 
     # Match multi-word symptoms first
     for symptom, synonyms in symptom_dict.items():
-        # Match the entire symptom as a phrase first
-        score = fuzz.token_set_ratio(" ".join(tokens), symptom.lower())
+        score = fuzz.token_set_ratio("".join(token.text for token in doc), symptom.lower())
         if score >= threshold:
-            detected_symptoms.append((symptom, symptom))  # Ensure correct structure
+            detected_symptoms.append(SymptomMatch(phrase=symptom, matched_symptom=symptom, match_type="phrase"))
             matched_words.update(symptom.lower().split())
-
-    # Now match individual words for remaining tokens
-    for word in tokens:
-        if word in matched_words:
-            continue  # Skip if this word is already part of a multi-word symptom
-        for symptom, synonyms in symptom_dict.items():
-            for synonym in synonyms:
-                score = fuzz.token_set_ratio(word, synonym)
-                if score >= threshold:
-                    detected_symptoms.append((word, symptom, synonym))
 
     return detected_symptoms
 
@@ -72,24 +131,37 @@ def extract_symptoms(text, symptom_dict, threshold=100):
 # Interactive loop
 print("Type a symptom description (or 'exit' to quit):")
 while True:
-    #input_text = input("\n> ")
-    input_text = "I have a sore throat and cough."
+    input_text = input("\n> ")
+    #input_text = "My arm is swollen."
     if input_text.lower() == "exit":
         print("Exiting...")
         break
+    elif "$" in input_text:
+        print(symptom_synonyms[re.sub('[$]', '', input_text)])
+        continue
 
     matches = extract_symptoms(input_text, symptom_synonyms)
 
     if matches:
         print("\nDetected Symptoms:")
         for match in matches:
-            if len(match) == 2:  # Multi-word symptom match
-                word, symptom = match
-                print(f"- '{word}' matched with symptom: {symptom}")
-            elif len(match) == 3:  # Single word matching with synonym
-                word, symptom, synonym = match
-                print(f"- '{word}' matched with symptom: {symptom} (via synonym: {synonym})")
+            print(match)  # Automatically calls the __repr__ method of the SymptomMatch class
+
     else:
         print("\nNo symptoms detected.")
 
-    exit(0)
+    #exit(0)
+
+condition_name = "open wound of the arm"
+
+condition_df = df[df['diseases'] == condition_name]
+
+if not condition_df.empty:
+    for index, row in condition_df.iterrows():
+        print(f"Symptoms for {condition_name} (Row {index+1}):")
+        symptoms = row.drop('diseases')[row.drop('diseases') == 1].index.tolist()
+        for symptom in symptoms:
+            print(f"- {symptom}")
+        print("-" * 20)
+else:
+    print(f"No records found for condition: {condition_name}")
