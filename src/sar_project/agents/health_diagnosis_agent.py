@@ -76,54 +76,77 @@ class SymptomMatch:
             return f"'{self.phrase}' matched with symptom: {self.matched_symptom}"
 
 
-# Symptom matching function
+def match_phrase(phrase, symptom_dict, threshold=80, match_type="dependency"):
+    """Matches a given phrase to symptoms using fuzzy matching."""
+    detected = []
+    normalized_phrase = normalize_phrase(phrase)
+
+    for symptom, synonyms in symptom_dict.items():
+        for synonym in synonyms:
+            normalized_synonym = normalize_phrase(synonym)
+            score = fuzz.token_set_ratio(normalized_phrase, normalized_synonym)
+            if score >= threshold:
+                detected.append(
+                    SymptomMatch(
+                        phrase=phrase,
+                        phrase_stem=normalized_phrase,
+                        matched_symptom=symptom,
+                        synonym=synonym,
+                        match_type=match_type
+                    )
+                )
+    return detected
+
+
 def extract_symptoms(text, symptom_dict, threshold=80):
     """Matches input text to symptoms using fuzzy matching and dependency parsing."""
-
     detected_symptoms = []
     matched_words = set()  # Tracks words already matched to avoid redundancy
     doc = nlp(text.lower())
 
-    # Dependency parsing to detect adjective-noun symptom phrases
+    # Process dependency relations for adjectives and verbs
     for token in doc:
         if token.text in stop_words:
             continue
-        if token.dep_ == "acomp":  # Check if the token is an adjective complement
-            subject = None
-            for child in token.head.children:  # Look at the verb's children
-                if child.dep_ == "nsubj":  # Find the subject noun
-                    print("\nNoun:", child.text)
+
+        subject = None
+        if token.dep_ == "acomp":  # Adjective complement (e.g., "swollen")
+            for child in token.head.children:
+                if child.dep_ == "nsubj":  # Find subject noun
                     subject = child.text
                     break
             if subject:
-                phrase = f"{token.text} {subject}"  # Example: "swollen leg"
-                print("phrase found:", phrase)
-                normalized_phrase = normalize_phrase(phrase)
-                print("normalized phrase:", normalized_phrase)
-
-                for symptom, synonyms in symptom_dict.items():
-                    for synonym in synonyms:
-                        normalized_synonym = normalize_phrase(synonym)
-                        score = fuzz.token_set_ratio(normalized_phrase, normalized_synonym)
-                        if score >= threshold:
-                            detected_symptoms.append(
-                                SymptomMatch(phrase=phrase, phrase_stem=normalized_phrase, matched_symptom=symptom, synonym=synonym, match_type="dependency"))
+                phrase = f"{token.text} {subject}"  # e.g., "swollen arm"
+                detected_symptoms.extend(match_phrase(phrase, symptom_dict, threshold))
                 matched_words.update([token.text, subject])
 
-    for token in doc:
-        if token.text not in matched_words:
-            for symptom, synonyms in symptom_dict.items():
-                for synonym in synonyms:
-                    score = fuzz.token_set_ratio(token.text, synonym)
-                    if score >= threshold:
-                        detected_symptoms.append(SymptomMatch(phrase=token.text, matched_symptom=symptom, synonym=synonym))
+        elif token.pos_ == "VERB" and token.tag_ == "VBG":  # Verb in -ing form (e.g., "swelling")
+            for child in token.children:
+                if child.dep_ == "nsubj":  # Find subject noun
+                    subject = child.text
+                    break
+            if subject:
+                phrase = f"{subject} {token.text}"  # e.g., "arm swelling"
+                detected_symptoms.extend(match_phrase(phrase, symptom_dict, threshold))
+                matched_words.update([subject, token.text])
 
-    # Match multi-word symptoms first
-    for symptom, synonyms in symptom_dict.items():
-        score = fuzz.token_set_ratio("".join(token.text for token in doc), symptom.lower())
-        if score >= threshold:
-            detected_symptoms.append(SymptomMatch(phrase=symptom, matched_symptom=symptom, match_type="phrase"))
-            matched_words.update(symptom.lower().split())
+    # Match multi-word symptoms from the entire text
+    joined_text = " ".join(token.text for token in doc)
+    phrase_matches = match_phrase(joined_text, symptom_dict, threshold, match_type="phrase")
+    detected_symptoms.extend(phrase_matches)
+
+    # Update matched_words with tokens from each matched symptom phrase
+    for phrase_match in phrase_matches:
+        # Here, match.matched_symptom is assumed to be something like "arm pain" or "knee pain"
+        tokens_in_match = phrase_match.matched_symptom.lower().split()
+        matched_words.update(tokens_in_match)
+
+    # Process individual tokens if not already matched
+    for token in doc:
+        if token.text in stop_words or token.text in matched_words:
+            continue
+        detected_symptoms.extend(match_phrase(token.text, symptom_dict, threshold, match_type="single-word"))
+        matched_words.add(token.text)
 
     return detected_symptoms
 
@@ -151,17 +174,3 @@ while True:
         print("\nNo symptoms detected.")
 
     #exit(0)
-
-condition_name = "open wound of the arm"
-
-condition_df = df[df['diseases'] == condition_name]
-
-if not condition_df.empty:
-    for index, row in condition_df.iterrows():
-        print(f"Symptoms for {condition_name} (Row {index+1}):")
-        symptoms = row.drop('diseases')[row.drop('diseases') == 1].index.tolist()
-        for symptom in symptoms:
-            print(f"- {symptom}")
-        print("-" * 20)
-else:
-    print(f"No records found for condition: {condition_name}")
