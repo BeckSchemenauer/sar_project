@@ -28,11 +28,12 @@ X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_
 # Define parameter grid
 param_grid = {
     'n_estimators': [200],
-    'max_depth': [20],
-    'min_samples_split': [5, 7, 9],
-    'min_samples_leaf': [1, 2, 3],
+    'max_depth': [70],
+    'min_samples_split': [8],
+    'min_samples_leaf': [1],
     'bootstrap': [True],
-    'max_features': ['sqrt']
+    'max_features': ['sqrt'],
+    'random_state': [42]
 }
 
 # Iterate through parameter combinations
@@ -42,7 +43,7 @@ best_params = None
 
 for params in (dict(zip(param_grid.keys(), values)) for values in itertools.product(*param_grid.values())):
     print(f"Training with parameters: {params}")
-    rf_model = RandomForestClassifier(**params, random_state=42, n_jobs=-1)
+    rf_model = RandomForestClassifier(**params, n_jobs=-1)
     rf_model.fit(X_train, y_train)
     y_pred = rf_model.predict(X_test)
     accuracy = accuracy_score(y_test, y_pred)
