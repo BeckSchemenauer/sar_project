@@ -4,7 +4,7 @@
 
 Symptom extraction and disease prediction. This agent takes text (natural language) as input, and uses NLP techniques to match symptoms to those represented in a dataset. A random forest model then predicts a disease / condition on the detected symptoms.
 
-Dataset from Kaggle: https://www.kaggle.com/datasets/dhivyeshrk/diseases-and-symptoms-dataset
+Diseases and Symptoms Dataset: Compiled by Dhivyesh R.K. Available at [https://www.kaggle.com/datasets/dhivyeshrk/diseases-and-symptoms-dataset]. Data source: The World Bank.
 
 Steps to run:
 
