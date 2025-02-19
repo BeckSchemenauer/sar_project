@@ -1,70 +1,164 @@
+import re
 import pandas as pd
-from sklearn.model_selection import train_test_split
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import accuracy_score, classification_report
-import joblib
-import itertools
+import nltk
+import spacy
+from nltk.tokenize import word_tokenize
+from nltk.corpus import wordnet, stopwords
+from rapidfuzz import fuzz
+from nltk.stem import PorterStemmer
 
-# Load dataset
-df = pd.read_csv('src/sar_project/knowledge/Final_Augmented_dataset_Diseases_and_Symptoms.csv')
+ps = PorterStemmer()
 
-# Separate features and target variable
-X = df.iloc[:, 1:]
-y = df['diseases']
 
-# Print unique classes and their counts
-class_counts = y.value_counts()
-print(f"Number of unique classes: {y.nunique()}")
+def normalize_phrase(phrase):
+    tokens = phrase.split()
+    # Stem each token and then rejoin
+    normalized = " ".join(ps.stem(token) for token in tokens)
+    return normalized
 
-# Keep only classes with more than 100 cases
-y = y[y.isin(class_counts[class_counts > 100].index)]
-X = X.loc[y.index]
 
-print(f"Number of unique classes (after dropping): {y.nunique()}")
+#nltk.download("punkt")
+#nltk.download("wordnet")
+#nltk.download("stopwords")  # Download stop words list
 
-# Split data into training and test sets
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
+nlp = spacy.load("en_core_web_sm")
+stop_words = set(stopwords.words("english"))
 
-# Define parameter grid
-param_grid = {
-    'n_estimators': [200],
-    'max_depth': [70],
-    'min_samples_split': [8],
-    'min_samples_leaf': [1],
-    'bootstrap': [True],
-    'max_features': ['sqrt'],
-    'random_state': [42]
-}
+csv_path = "src/sar_project/knowledge/Final_Augmented_dataset_Diseases_and_Symptoms.csv"
+df = pd.read_csv(csv_path)
+symptoms = list(df.columns[1:])
 
-# Iterate through parameter combinations
-best_model = None
-best_score = 0
-best_params = None
 
-for params in (dict(zip(param_grid.keys(), values)) for values in itertools.product(*param_grid.values())):
-    print(f"Training with parameters: {params}")
-    rf_model = RandomForestClassifier(**params, n_jobs=-1)
-    rf_model.fit(X_train, y_train)
-    y_pred = rf_model.predict(X_test)
-    accuracy = accuracy_score(y_test, y_pred)
-    print(f"Accuracy: {accuracy:.4f}")
+# symptom-to-synonyms dictionary
+def expand_symptoms(symptom_list):
+    """Generates a dictionary mapping each symptom to its synonyms."""
+    symptom_dict = {}
+    for symptom in symptom_list:
+        synonyms = set()
+        for syn in wordnet.synsets(symptom.replace(" ", "_")):
+            for lemma in syn.lemmas():
+                synonyms.add(lemma.name().replace("_", " "))
+        symptom_dict[symptom] = list(synonyms) if synonyms else [symptom]
+    return symptom_dict
 
-    if accuracy > best_score:
-        best_score = accuracy
-        best_model = rf_model
-        best_params = params
 
-# Save best model
-joblib.dump(best_model, 'best_random_forest_model.pkl')
+symptom_synonyms = expand_symptoms(symptoms)
 
-# Evaluate best model
-y_pred = best_model.predict(X_test)
-report = classification_report(y_test, y_pred)
 
-# Save results to file
-with open('model_results.txt', 'w') as f:
-    f.write(f'Best Parameters: {best_params}\n')
-    f.write(f'Best Accuracy: {best_score:.4f}\n')
-    f.write(report)
+class SymptomMatch:
+    """Custom class to represent a symptom match."""
 
-print("Best model parameters saved.")
+    def __init__(self, phrase, phrase_stem=None, matched_symptom=None, synonym=None, match_type=""):
+        self.phrase = phrase
+        self.phrase_stem = phrase_stem
+        self.matched_symptom = matched_symptom
+        self.synonym = synonym
+        self.match_type = match_type
+
+    def __repr__(self):
+        if self.match_type == "phrase":
+            return f"'{self.phrase}' matched with symptom: {self.matched_symptom} (whole phrase match)"
+        elif self.match_type == "dependency":
+            return f"'{self.phrase}' matched with symptom: {self.matched_symptom} (via dependency parsing) (Stemmed: {self.phrase_stem})"
+        elif self.synonym:
+            return f"'{self.phrase}' matched with symptom: {self.matched_symptom} (via synonym: {self.synonym})"
+        else:
+            return f"'{self.phrase}' matched with symptom: {self.matched_symptom}"
+
+
+def match_phrase(phrase, symptom_dict, threshold=80, match_type="dependency"):
+    """Matches a given phrase to symptoms using fuzzy matching."""
+    detected = []
+    normalized_phrase = normalize_phrase(phrase)
+
+    for symptom, synonyms in symptom_dict.items():
+        for synonym in synonyms:
+            normalized_synonym = normalize_phrase(synonym)
+            score = fuzz.token_set_ratio(normalized_phrase, normalized_synonym)
+            if score >= threshold:
+                detected.append(
+                    SymptomMatch(
+                        phrase=phrase,
+                        phrase_stem=normalized_phrase,
+                        matched_symptom=symptom,
+                        synonym=synonym,
+                        match_type=match_type
+                    )
+                )
+    return detected
+
+
+def extract_symptoms(text, symptom_dict, threshold=80):
+    """Matches input text to symptoms using fuzzy matching and dependency parsing."""
+    detected_symptoms = []
+    matched_words = set()
+    doc = nlp(text.lower())
+
+    # process dependency relations for adjectives and verbs
+    for token in doc:
+        if token.text in stop_words:
+            continue
+
+        subject = None
+        if token.dep_ == "acomp":
+            for child in token.head.children:
+                if child.dep_ == "nsubj":
+                    subject = child.text
+                    break
+            if subject:
+                phrase = f"{token.text} {subject}"
+                detected_symptoms.extend(match_phrase(phrase, symptom_dict, threshold))
+                matched_words.update([token.text, subject])
+
+        elif token.pos_ == "VERB" and token.tag_ == "VBG":
+            for child in token.children:
+                if child.dep_ == "nsubj":
+                    subject = child.text
+                    break
+            if subject:
+                phrase = f"{subject} {token.text}"
+                detected_symptoms.extend(match_phrase(phrase, symptom_dict, threshold))
+                matched_words.update([subject, token.text])
+
+    # match multi-word symptoms from the entire text
+    joined_text = " ".join(token.text for token in doc)
+    phrase_matches = match_phrase(joined_text, symptom_dict, threshold, match_type="phrase")
+    detected_symptoms.extend(phrase_matches)
+
+    # update matched_words with tokens from each matched symptom phrase
+    for phrase_match in phrase_matches:
+        tokens_in_match = phrase_match.matched_symptom.lower().split()
+        matched_words.update(tokens_in_match)
+
+    # process individual tokens if not already matched
+    for token in doc:
+        if token.text in stop_words or token.text in matched_words:
+            continue
+        detected_symptoms.extend(match_phrase(token.text, symptom_dict, threshold, match_type="single-word"))
+        matched_words.add(token.text)
+
+    return detected_symptoms
+
+
+print("Type a symptom description (or 'exit' to quit):")
+while True:
+    input_text = input("\n> ")
+    #input_text = "My arm is swollen."
+    if input_text.lower() == "exit":
+        print("Exiting...")
+        break
+    elif "$" in input_text:
+        print(symptom_synonyms[re.sub('[$]', '', input_text)])
+        continue
+
+    matches = extract_symptoms(input_text, symptom_synonyms)
+
+    if matches:
+        print("\nDetected Symptoms:")
+        for match in matches:
+            print(match)
+
+    else:
+        print("\nNo symptoms detected.")
+
+    #exit(0)
