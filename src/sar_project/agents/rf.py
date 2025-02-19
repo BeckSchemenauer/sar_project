@@ -55,14 +55,14 @@ for params in (dict(zip(param_grid.keys(), values)) for values in itertools.prod
         best_params = params
 
 # Save best model
-joblib.dump(best_model, 'best_random_forest_model.pkl')
+joblib.dump(best_model, 'src/sar_project/models/best_random_forest_model.pkl')
 
 # Evaluate best model
 y_pred = best_model.predict(X_test)
 report = classification_report(y_test, y_pred)
 
 # Save results to file
-with open('model_results.txt', 'w') as f:
+with open('src/sar_project/models/model_results.txt', 'w') as f:
     f.write(f'Best Parameters: {best_params}\n')
     f.write(f'Best Accuracy: {best_score:.4f}\n')
     f.write(report)
