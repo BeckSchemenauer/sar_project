@@ -1,25 +1,17 @@
 import re
-import pandas as pd
+import joblib
 import nltk
+import numpy as np
+import pandas as pd
 import spacy
-from nltk.tokenize import word_tokenize
 from nltk.corpus import wordnet, stopwords
 from rapidfuzz import fuzz
 from nltk.stem import PorterStemmer
 
 ps = PorterStemmer()
-
-
-def normalize_phrase(phrase):
-    tokens = phrase.split()
-    # Stem each token and then rejoin
-    normalized = " ".join(ps.stem(token) for token in tokens)
-    return normalized
-
-
-#nltk.download("punkt")
-#nltk.download("wordnet")
-#nltk.download("stopwords")  # Download stop words list
+nltk.download("punkt")
+nltk.download("wordnet")
+nltk.download("stopwords")  # Download stop words list
 
 nlp = spacy.load("en_core_web_sm")
 stop_words = set(stopwords.words("english"))
@@ -27,6 +19,27 @@ stop_words = set(stopwords.words("english"))
 csv_path = "src/sar_project/knowledge/Final_Augmented_dataset_Diseases_and_Symptoms.csv"
 df = pd.read_csv(csv_path)
 symptoms = list(df.columns[1:])
+
+
+def load_model(model_path='src/sar_project/models/best_random_forest_model.pkl'):
+    return joblib.load(model_path)
+
+
+def predict_disease(model, symptom_list, all_symptoms):
+    # input  vector (1 for present symptoms, 0 otherwise)
+    input_vector = {symptom: 1 if symptom in symptom_list else 0 for symptom in all_symptoms}
+
+    input_df = pd.DataFrame([input_vector])
+
+    predicted_disease = model.predict(input_df)[0]
+    return predicted_disease
+
+
+def normalize_phrase(phrase):
+    tokens = phrase.split()
+    # Stem each token and then rejoin
+    normalized = " ".join(ps.stem(token) for token in tokens)
+    return normalized
 
 
 # symptom-to-synonyms dictionary
@@ -46,7 +59,6 @@ symptom_synonyms = expand_symptoms(symptoms)
 
 
 class SymptomMatch:
-    """Custom class to represent a symptom match."""
 
     def __init__(self, phrase, phrase_stem=None, matched_symptom=None, synonym=None, match_type=""):
         self.phrase = phrase
@@ -140,10 +152,11 @@ def extract_symptoms(text, symptom_dict, threshold=80):
     return detected_symptoms
 
 
+rf_model = load_model()
 print("Type a symptom description (or 'exit' to quit):")
 while True:
     input_text = input("\n> ")
-    #input_text = "My arm is swollen."
+
     if input_text.lower() == "exit":
         print("Exiting...")
         break
@@ -154,9 +167,9 @@ while True:
     matches = extract_symptoms(input_text, symptom_synonyms)
 
     if matches:
-        print("\nDetected Symptoms:")
-        for match in matches:
-            print(match)
+        detected_symptoms = [obj.matched_symptom for obj in matches]
+        print("\nDetected Symptoms:", detected_symptoms)
+        print("Predicted Disease:", predict_disease(rf_model, detected_symptoms, symptoms))
 
     else:
         print("\nNo symptoms detected.")
