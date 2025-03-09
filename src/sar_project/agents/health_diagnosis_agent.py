@@ -1,19 +1,37 @@
 import re
 import joblib
 import nltk
-import numpy as np
 import pandas as pd
 import spacy
 from nltk.corpus import wordnet, stopwords
 from rapidfuzz import fuzz
 from nltk.stem import PorterStemmer
+import subprocess
+import sys
 
 ps = PorterStemmer()
 nltk.download("punkt")
 nltk.download("wordnet")
 nltk.download("stopwords")  # Download stop words list
 
-nlp = spacy.load("en_core_web_sm")
+model_name = "en_core_web_sm"
+
+try:
+    nlp = spacy.load(model_name)
+    print(f"{model_name} model already loaded.")
+except OSError:
+    print(f"{model_name} model not found. Downloading...")
+    try:
+        subprocess.check_call([sys.executable, "-m", "spacy", "download", model_name])
+        nlp = spacy.load(model_name)
+        print(f"{model_name} model downloaded and loaded successfully.")
+    except subprocess.CalledProcessError as e:
+        print(f"Error downloading {model_name}: {e}")
+        sys.exit(1)
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")
+        sys.exit(1)
+
 stop_words = set(stopwords.words("english"))
 
 csv_path = "src/sar_project/knowledge/Final_Augmented_dataset_Diseases_and_Symptoms.csv"
