@@ -1,39 +1,9 @@
-import re
 import joblib
-import nltk
 import pandas as pd
-import spacy
-from nltk.corpus import wordnet, stopwords
-from rapidfuzz import fuzz
-from nltk.stem import PorterStemmer
-import subprocess
-import sys
+import re
+from nltk.corpus import wordnet
 from sklearn.feature_extraction.text import TfidfTransformer
-
-ps = PorterStemmer()
-nltk.download("punkt")
-nltk.download("wordnet")
-nltk.download("stopwords")  # Download stop words list
-
-model_name = "en_core_web_sm"
-
-try:
-    nlp = spacy.load(model_name)
-    print(f"{model_name} model already loaded.")
-except OSError:
-    print(f"{model_name} model not found. Downloading...")
-    try:
-        subprocess.check_call([sys.executable, "-m", "spacy", "download", model_name])
-        nlp = spacy.load(model_name)
-        print(f"{model_name} model downloaded and loaded successfully.")
-    except subprocess.CalledProcessError as e:
-        print(f"Error downloading {model_name}: {e}")
-        sys.exit(1)
-    except Exception as e:
-        print(f"An unexpected error occurred: {e}")
-        sys.exit(1)
-
-stop_words = set(stopwords.words("english"))
+from src.sar_project.agents import SymptomMatcher
 
 csv_path = "src/sar_project/knowledge/Final_Augmented_dataset_Diseases_and_Symptoms.csv"
 df = pd.read_csv(csv_path)
@@ -96,13 +66,6 @@ def predict_disease(model, symptom_list, all_symptoms):
     return sorted_probabilities[:3]
 
 
-def normalize_phrase(phrase):
-    tokens = phrase.split()
-    # Stem each token and then rejoin
-    normalized = " ".join(ps.stem(token) for token in tokens)
-    return normalized
-
-
 # symptom-to-synonyms dictionary
 def expand_symptoms(symptom_list):
     """Generates a dictionary mapping each symptom to its synonyms."""
@@ -119,100 +82,6 @@ def expand_symptoms(symptom_list):
 symptom_synonyms = expand_symptoms(symptoms)
 
 
-class SymptomMatch:
-
-    def __init__(self, phrase, phrase_stem=None, matched_symptom=None, synonym=None, match_type=""):
-        self.phrase = phrase
-        self.phrase_stem = phrase_stem
-        self.matched_symptom = matched_symptom
-        self.synonym = synonym
-        self.match_type = match_type
-
-    def __repr__(self):
-        if self.match_type == "phrase":
-            return f"'{self.phrase}' matched with symptom: {self.matched_symptom} (whole phrase match)"
-        elif self.match_type == "dependency":
-            return f"'{self.phrase}' matched with symptom: {self.matched_symptom} (via dependency parsing) (Stemmed: {self.phrase_stem})"
-        elif self.synonym:
-            return f"'{self.phrase}' matched with symptom: {self.matched_symptom} (via synonym: {self.synonym})"
-        else:
-            return f"'{self.phrase}' matched with symptom: {self.matched_symptom}"
-
-
-def match_phrase(phrase, symptom_dict, threshold=80, match_type="dependency"):
-    """Matches a given phrase to symptoms using fuzzy matching."""
-    detected = []
-    normalized_phrase = normalize_phrase(phrase)
-
-    for symptom, synonyms in symptom_dict.items():
-        for synonym in synonyms:
-            normalized_synonym = normalize_phrase(synonym)
-            score = fuzz.token_set_ratio(normalized_phrase, normalized_synonym)
-            if score >= threshold:
-                detected.append(
-                    SymptomMatch(
-                        phrase=phrase,
-                        phrase_stem=normalized_phrase,
-                        matched_symptom=symptom,
-                        synonym=synonym,
-                        match_type=match_type
-                    )
-                )
-    return detected
-
-
-def extract_symptoms(text, symptom_dict, threshold=80):
-    """Matches input text to symptoms using fuzzy matching and dependency parsing."""
-    detected_symptoms = []
-    matched_words = set()
-    doc = nlp(text.lower())
-
-    # process dependency relations for adjectives and verbs
-    for token in doc:
-        if token.text in stop_words:
-            continue
-
-        subject = None
-        if token.dep_ == "acomp":
-            for child in token.head.children:
-                if child.dep_ == "nsubj":
-                    subject = child.text
-                    break
-            if subject:
-                phrase = f"{token.text} {subject}"
-                detected_symptoms.extend(match_phrase(phrase, symptom_dict, threshold))
-                matched_words.update([token.text, subject])
-
-        elif token.pos_ == "VERB" and token.tag_ == "VBG":
-            for child in token.children:
-                if child.dep_ == "nsubj":
-                    subject = child.text
-                    break
-            if subject:
-                phrase = f"{subject} {token.text}"
-                detected_symptoms.extend(match_phrase(phrase, symptom_dict, threshold))
-                matched_words.update([subject, token.text])
-
-    # match multi-word symptoms from the entire text
-    joined_text = " ".join(token.text for token in doc)
-    phrase_matches = match_phrase(joined_text, symptom_dict, threshold, match_type="phrase")
-    detected_symptoms.extend(phrase_matches)
-
-    # update matched_words with tokens from each matched symptom phrase
-    for phrase_match in phrase_matches:
-        tokens_in_match = phrase_match.matched_symptom.lower().split()
-        matched_words.update(tokens_in_match)
-
-    # process individual tokens if not already matched
-    for token in doc:
-        if token.text in stop_words or token.text in matched_words:
-            continue
-        detected_symptoms.extend(match_phrase(token.text, symptom_dict, threshold, match_type="single-word"))
-        matched_words.add(token.text)
-
-    return detected_symptoms
-
-
 rf_model = load_model()
 print("Type a symptom description (or 'exit' to quit):")
 while True:
@@ -225,13 +94,13 @@ while True:
         print(symptom_synonyms[re.sub('[$]', '', input_text)])
         continue
 
-    matches = extract_symptoms(input_text, symptom_synonyms)
+    symptom_matches = SymptomMatcher.extract_symptoms(input_text, symptom_synonyms)
 
-    if matches:
-        detected_symptoms = [obj.matched_symptom for obj in matches]
+    if symptom_matches:
+        detected_symptoms = [obj.matched_symptom for obj in symptom_matches]
         print("\nDetected Symptoms:", detected_symptoms)
-        for match in matches:
-            print(match)
+        for symptom_match in symptom_matches:
+            print(symptom_match)
         predicted_diseases = predict_disease(rf_model, detected_symptoms, symptoms)
         top_prediction = predicted_diseases[0][0]
         most_frequent_symptom, highest_tfidf_symptom, combined_symptoms = get_top_symptoms_for_condition(top_prediction)
