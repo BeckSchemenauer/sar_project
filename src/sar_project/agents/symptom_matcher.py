@@ -51,7 +51,7 @@ class SymptomMatch:
             return f"'{self.phrase}' matched with symptom: {self.matched_symptom} (whole phrase match)"
         elif self.match_type == "dependency":
             return f"'{self.phrase}' matched with symptom: {self.matched_symptom} (via dependency parsing) (Stemmed: {self.phrase_stem})"
-        elif self.synonym:
+        elif self.synonym != self.matched_symptom:
             return f"'{self.phrase}' matched with symptom: {self.matched_symptom} (via synonym: {self.synonym})"
         else:
             return f"'{self.phrase}' matched with symptom: {self.matched_symptom}"
