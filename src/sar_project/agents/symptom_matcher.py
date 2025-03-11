@@ -5,6 +5,8 @@ from rapidfuzz import fuzz
 import spacy
 import subprocess
 import sys
+import pandas as pd
+from nltk.corpus import wordnet
 
 ps = PorterStemmer()
 nltk.download("punkt")
@@ -31,6 +33,9 @@ except OSError:
 
 stop_words = set(stopwords.words("english"))
 
+df = pd.read_csv("src/sar_project/knowledge/Final_Augmented_dataset_Diseases_and_Symptoms.csv")
+symptoms = list(df.columns[1:])
+
 
 class SymptomMatch:
 
@@ -52,6 +57,22 @@ class SymptomMatch:
             return f"'{self.phrase}' matched with symptom: {self.matched_symptom}"
 
 
+# symptom-to-synonyms dictionary
+def expand_symptoms(symptom_list):
+    """Generates a dictionary mapping each symptom to its synonyms."""
+    symptom_dict = {}
+    for symptom in symptom_list:
+        synonyms = set()
+        for syn in wordnet.synsets(symptom.replace(" ", "_")):
+            for lemma in syn.lemmas():
+                synonyms.add(lemma.name().replace("_", " "))
+        symptom_dict[symptom] = list(synonyms) if synonyms else [symptom]
+    return symptom_dict
+
+
+symptom_dict = expand_symptoms(symptoms)
+
+
 def normalize_phrase(phrase):
     tokens = phrase.split()
     # Stem each token and then rejoin
@@ -59,7 +80,7 @@ def normalize_phrase(phrase):
     return normalized
 
 
-def match_phrase(phrase, symptom_dict, threshold=80, match_type="dependency"):
+def match_phrase(phrase, threshold=80, match_type="dependency"):
     """Matches a given phrase to symptoms using fuzzy matching."""
     detected = []
     normalized_phrase = normalize_phrase(phrase)
@@ -81,7 +102,7 @@ def match_phrase(phrase, symptom_dict, threshold=80, match_type="dependency"):
     return detected
 
 
-def extract_symptoms(text, symptom_dict, threshold=80):
+def extract_symptoms(text, threshold=80):
     """Matches input text to symptoms using fuzzy matching and dependency parsing."""
     detected_symptoms = []  # a list of SymptomMatch objects
     matched_words = set()  # a set of words used to match symptoms
@@ -101,7 +122,7 @@ def extract_symptoms(text, symptom_dict, threshold=80):
                     break
             if subject:
                 phrase = f"{token.text} {subject}"
-                matches = match_phrase(phrase, symptom_dict, threshold)
+                matches = match_phrase(phrase, threshold)
                 for match in matches:
                     if match.matched_symptom not in matched_symptoms:
                         detected_symptoms.append(match)
@@ -116,7 +137,7 @@ def extract_symptoms(text, symptom_dict, threshold=80):
                     break
             if subject:
                 phrase = f"{subject} {token.text}"
-                matches = match_phrase(phrase, symptom_dict, threshold)
+                matches = match_phrase(phrase, threshold)
                 for match in matches:
                     if match.matched_symptom not in matched_symptoms:
                         detected_symptoms.append(match)
@@ -126,7 +147,7 @@ def extract_symptoms(text, symptom_dict, threshold=80):
 
     # match multi-word symptoms from the entire text
     joined_text = " ".join(token.text for token in doc)
-    phrase_matches = match_phrase(joined_text, symptom_dict, threshold, match_type="phrase")
+    phrase_matches = match_phrase(joined_text, threshold, match_type="phrase")
     for match in phrase_matches:
         if match.matched_symptom not in matched_symptoms:
             detected_symptoms.append(match)
@@ -141,7 +162,7 @@ def extract_symptoms(text, symptom_dict, threshold=80):
     for token in doc:
         if token.text in stop_words or token.text in matched_words:
             continue
-        token_matches = match_phrase(token.text, symptom_dict, threshold, match_type="single-word")
+        token_matches = match_phrase(token.text, threshold, match_type="single-word")
         for match in token_matches:
             if match.matched_symptom not in matched_symptoms:
                 detected_symptoms.append(match)
