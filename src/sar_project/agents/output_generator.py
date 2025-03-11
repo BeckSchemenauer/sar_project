@@ -5,7 +5,6 @@ from rich.text import Text
 from src.sar_project.agents import symptom_matcher
 import pandas as pd
 from sklearn.feature_extraction.text import TfidfTransformer
-import joblib
 
 condition_description_df = pd.read_csv("src/sar_project/knowledge/disease_descriptions_v2.csv")
 df = pd.read_csv("src/sar_project/knowledge/Final_Augmented_dataset_Diseases_and_Symptoms.csv")
@@ -23,6 +22,8 @@ def display_diagnosis(detected_symptoms, predicted_diseases, top_symptoms, descr
     # Left Panel (Diagnosis Summary) with added spacing
     left_text = Text()
     left_text.append(f"Predicted Disease: {predicted_diseases[0][0]}\n\n")
+    if predicted_diseases[0][1] < 30:
+        left_text.append(f"Probability of predicted disease is low ({predicted_diseases[0][1]}%), please try expanding on your symptom description.\n\n")
     left_text.append(f"Disease Description:\n{description}\n\n")
     left_text.append(f"Top Symptoms:\n" + "\n".join(f" • {symptom}" for symptom in top_symptoms))
 
@@ -106,10 +107,10 @@ def predict_disease(model, symptom_list):
 
     # normalize and round values
     total = sum(score for _, score in sorted_probabilities[:5])
-    normalized_symptoms = [(symptom, round((score / total) * 100, 2)) for symptom, score in sorted_probabilities[:5]]
+    normalized_predictions = [(symptom, round((score / total) * 100, 2)) for symptom, score in sorted_probabilities[:5]]
 
     # return top 3
-    return normalized_symptoms
+    return normalized_predictions
 
 
 def generate_output(input_text, model):
@@ -118,7 +119,8 @@ def generate_output(input_text, model):
 
     if symptom_matches:
         # detected_symptoms
-        detected_symptoms = [(obj.matched_symptom, obj.__repr__()) for obj in symptom_matches]
+        detected_symptoms_with_explanation = [(obj.matched_symptom, obj.__repr__()) for obj in symptom_matches]
+        detected_symptoms = [obj.matched_symptom for obj in symptom_matches]
 
         # predicted diseases
         predicted_diseases = predict_disease(model, detected_symptoms)
@@ -136,15 +138,7 @@ def generate_output(input_text, model):
         except KeyError:
             description = "No description found"
 
-        display_diagnosis(detected_symptoms, predicted_diseases, top_symptoms, description)
+        display_diagnosis(detected_symptoms_with_explanation, predicted_diseases, top_symptoms, description)
 
     else:
         print("\nNo symptoms detected. Please expand on your description or take a different approach.")
-
-def load_model(model_path='src/sar_project/models/best_random_forest_model.pkl'):
-    return joblib.load(model_path)
-
-
-rf_model = load_model()
-
-generate_output("My ribs hurt and it hurts to breathe.", rf_model)
