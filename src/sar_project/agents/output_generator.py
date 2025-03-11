@@ -1,6 +1,7 @@
 from rich.console import Console
 from rich.layout import Layout
 from rich.table import Table
+from rich.text import Text
 from src.sar_project.agents import symptom_matcher
 import pandas as pd
 from sklearn.feature_extraction.text import TfidfTransformer
@@ -14,37 +15,42 @@ all_symptoms = list(df.columns[1:])
 def display_diagnosis(detected_symptoms, predicted_diseases, top_symptoms, description):
     console = Console(width=250)  # Set a wider console width
 
-    # Create the layout
+    # Create the layout with spacing
     layout = Layout()
-    layout.split_row(Layout(name="left", ratio=4), Layout(name="middle", ratio=6), Layout(name="right", ratio=6))
+    layout.split_row(Layout(name="left", ratio=5), Layout(name="gap", size=2), Layout(name="middle", ratio=6),
+                     Layout(name="right", ratio=6))
 
-    # Left Panel (Diagnosis Summary)
-    left_text = (
-            f"[bold cyan]Predicted Disease:[/bold cyan] {predicted_diseases[0][0]}\n\n"
-            f"[bold cyan]Disease Description:[/bold cyan]\n{description}\n\n"
-            f"[bold cyan]Top Symptoms:[/bold cyan]\n" + "\n".join(f" • {symptom}" for symptom in top_symptoms)
-    )
+    # Left Panel (Diagnosis Summary) with added spacing
+    left_text = Text()
+    left_text.append(f"Predicted Disease: {predicted_diseases[0][0]}\n\n")
+    left_text.append(f"Disease Description:\n{description}\n\n")
+    left_text.append(f"Top Symptoms:\n" + "\n".join(f" • {symptom}" for symptom in top_symptoms))
+
     layout["left"].update(left_text)
+
+    # Add a gap between left panel and tables
+    layout["gap"].update("    ")
 
     # Table 1: Detected Symptoms
     symptom_table = Table(title="Detected Symptoms", show_lines=True)
-    symptom_table.add_column("Symptom", justify="left", style="green")
-    symptom_table.add_column("Method of Detection", justify="right", style="yellow")
+    symptom_table.add_column("Symptom", justify="left")
+    symptom_table.add_column("Method of Detection", justify="right")
 
     for symptom, method in detected_symptoms:
         symptom_table.add_row(symptom, method)
 
     # Table 2: Predicted Diseases
     disease_table = Table(title="Top Predicted Diseases", show_lines=True)
-    disease_table.add_column("Disease", justify="left", style="magenta")
-    disease_table.add_column("Confidence", justify="right", style="cyan")
+    disease_table.add_column("Disease", justify="left")
+    disease_table.add_column("Confidence", justify="right")
 
     for disease, confidence in predicted_diseases:
-        disease_table.add_row(disease, f"{confidence:.3f}")
+        disease_table.add_row(disease, f"{confidence}%")
 
-    # Update Middle and Right Panels to just display tables
-    layout["middle"].update(disease_table)
-    layout["right"].update(symptom_table)
+    # Update Middle and Right Panels to display tables side by side
+    layout["middle"].update(symptom_table)
+    layout["gap"].update("    ")
+    layout["right"].update(disease_table)
 
     # Print the layout
     console.print(layout)
@@ -98,11 +104,16 @@ def predict_disease(model, symptom_list):
     disease_probabilities = list(zip(class_labels, probabilities))
     sorted_probabilities = sorted(disease_probabilities, key=lambda x: x[1], reverse=True)
 
+    # normalize and round values
+    total = sum(score for _, score in sorted_probabilities[:5])
+    normalized_symptoms = [(symptom, round((score / total) * 100, 2)) for symptom, score in sorted_probabilities[:5]]
+
     # return top 3
-    return sorted_probabilities[:3]
+    return normalized_symptoms
 
 
 def generate_output(input_text, model):
+    print()
     symptom_matches = symptom_matcher.extract_symptoms(input_text)
 
     if symptom_matches:
